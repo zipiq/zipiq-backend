@@ -1,148 +1,188 @@
-// Updated ipfs.js - Conditional import to avoid Railway deployment errors
-class IPFSService {
+// ipfs.js - Pure Mock Implementation (No IPFS dependencies)
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+class MockIPFSService {
   constructor() {
-    this.client = null;
     this.chunkStore = new Map();
     this.streamStore = new Map();
-    this.connected = false;
+    this.mockStorage = new Map(); // Simulates IPFS content storage
+    this.connected = true; // Always "connected" for mock
+    this.nodeId = `mock-node-${crypto.randomBytes(4).toString('hex')}`;
     
-    // Initialize IPFS client conditionally
-    this.initializeIPFS();
+    // Create uploads directory for temporary file storage
+    this.uploadsDir = path.join(process.cwd(), 'uploads');
+    this.ensureUploadsDirectory();
+    
+    console.log('🎭 Mock IPFS Service initialized - No external dependencies');
+    console.log(`📁 Mock storage directory: ${this.uploadsDir}`);
   }
 
-  async initializeIPFS() {
+  ensureUploadsDirectory() {
     try {
-      // Check if IPFS should be enabled
-      const ipfsEnabled = process.env.IPFS_ENABLED === 'true';
-      const isProduction = process.env.NODE_ENV === 'production';
-      const hasIPFSConfig = process.env.IPFS_HOST && process.env.IPFS_HOST !== 'disabled';
-      
-      if (!ipfsEnabled || !hasIPFSConfig) {
-        console.log('⚠️ IPFS disabled - using mock storage for deployment');
-        return;
+      if (!fs.existsSync(this.uploadsDir)) {
+        fs.mkdirSync(this.uploadsDir, { recursive: true });
+        console.log(`📁 Created uploads directory: ${this.uploadsDir}`);
       }
+    } catch (error) {
+      console.error('❌ Failed to create uploads directory:', error);
+    }
+  }
 
-      // Dynamic import to avoid Railway errors
-      const { create } = await import('ipfs-http-client');
+  // Generate a realistic-looking IPFS hash
+  generateMockHash(data) {
+    const hash = crypto.createHash('sha256');
+    
+    if (Buffer.isBuffer(data)) {
+      hash.update(data);
+    } else if (typeof data === 'string') {
+      hash.update(data, 'utf8');
+    } else {
+      hash.update(JSON.stringify(data), 'utf8');
+    }
+    
+    // Add timestamp for uniqueness
+    hash.update(Date.now().toString());
+    
+    // Create a mock IPFS hash format (Qm...)
+    const digest = hash.digest('hex');
+    return `Qm${digest.substr(0, 44)}`; // Standard IPFS hash length
+  }
+
+  // Store data locally and return mock hash
+  async storeDataLocally(buffer, filename = null) {
+    try {
+      const mockHash = this.generateMockHash(buffer);
       
-      this.client = create({
-        host: process.env.IPFS_HOST || 'localhost',
-        port: parseInt(process.env.IPFS_PORT) || 5001,
-        protocol: process.env.IPFS_PROTOCOL || 'http',
-        timeout: 30000, // 30 second timeout
-        headers: process.env.IPFS_API_KEY ? {
-          'Authorization': `Bearer ${process.env.IPFS_API_KEY}`
-        } : undefined
+      // Store in memory
+      this.mockStorage.set(mockHash, {
+        data: buffer,
+        filename: filename,
+        size: buffer.length,
+        storedAt: new Date().toISOString(),
+        mimetype: this.guessMimeType(filename)
       });
       
-      // Test connection
-      await this.client.id();
-      this.connected = true;
+      // Optionally store to disk for persistence
+      if (filename) {
+        const filePath = path.join(this.uploadsDir, `${mockHash}-${filename}`);
+        fs.writeFileSync(filePath, buffer);
+      }
       
-      console.log(`🌐 IPFS Service connected - ${process.env.IPFS_PROTOCOL}://${process.env.IPFS_HOST}:${process.env.IPFS_PORT}`);
+      return mockHash;
     } catch (error) {
-      console.log(`⚠️ IPFS connection failed: ${error.message}`);
-      console.log('📦 Using mock storage for video chunks');
-      this.connected = false;
+      console.error('❌ Error storing mock data:', error);
+      throw error;
     }
+  }
+
+  guessMimeType(filename) {
+    if (!filename) return 'application/octet-stream';
+    
+    const ext = path.extname(filename).toLowerCase();
+    const mimeTypes = {
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.webm': 'video/webm',
+      '.mkv': 'video/x-matroska',
+      '.json': 'application/json',
+      '.txt': 'text/plain',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png'
+    };
+    
+    return mimeTypes[ext] || 'application/octet-stream';
   }
 
   async uploadChunk(buffer, metadata) {
-    // Always use mock storage if IPFS not connected
-    if (!this.connected) {
-      return this.mockUploadChunk(buffer, metadata);
-    }
-    
     try {
-      console.log(`📤 Uploading chunk ${metadata.chunkIndex} to IPFS...`);
+      console.log(`📤 Mock uploading chunk ${metadata.chunkIndex} for stream ${metadata.streamId}...`);
       
-      const result = await this.client.add(buffer, {
-        progress: (bytes) => {
-          // Optional: report progress
-        }
-      });
-
-      const ipfsHash = result.cid.toString();
+      // Generate mock IPFS hash
+      const mockHash = this.generateMockHash(buffer);
+      
+      // Store the chunk data
+      await this.storeDataLocally(buffer, `chunk-${metadata.chunkIndex}-${metadata.streamId}.bin`);
       
       const chunkData = {
-        ipfsHash,
+        ipfsHash: mockHash,
         streamId: metadata.streamId,
         chunkIndex: metadata.chunkIndex,
         timestamp: metadata.timestamp,
         userId: metadata.userId,
         size: buffer.length,
-        mimetype: metadata.mimetype,
-        uploadedAt: new Date().toISOString()
+        mimetype: metadata.mimetype || 'video/mp4',
+        uploadedAt: new Date().toISOString(),
+        isMock: true,
+        localPath: path.join(this.uploadsDir, `${mockHash}-chunk-${metadata.chunkIndex}-${metadata.streamId}.bin`)
       };
       
+      // Store chunk metadata
       this.chunkStore.set(`${metadata.streamId}_${metadata.chunkIndex}`, chunkData);
+      
+      // Update stream metadata
       await this.updateStreamChunks(metadata.streamId, chunkData);
       
-      console.log(`✅ Chunk uploaded to IPFS: ${ipfsHash}`);
+      console.log(`✅ Mock chunk uploaded: ${mockHash} (${buffer.length} bytes)`);
       
       return {
-        hash: ipfsHash,
+        hash: mockHash,
         size: buffer.length,
-        uploadedAt: chunkData.uploadedAt
+        uploadedAt: chunkData.uploadedAt,
+        isMock: true
       };
       
     } catch (error) {
-      console.error('❌ IPFS upload error, falling back to mock storage:', error);
-      return this.mockUploadChunk(buffer, metadata);
+      console.error('❌ Mock upload error:', error);
+      throw new Error(`Mock upload failed: ${error.message}`);
     }
-  }
-
-  mockUploadChunk(buffer, metadata) {
-    console.log(`📤 Mock uploading chunk ${metadata.chunkIndex}...`);
-    
-    const mockHash = `QmMock${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
-    
-    const chunkData = {
-      ipfsHash: mockHash,
-      streamId: metadata.streamId,
-      chunkIndex: metadata.chunkIndex,
-      timestamp: metadata.timestamp,
-      userId: metadata.userId,
-      size: buffer.length,
-      mimetype: metadata.mimetype,
-      uploadedAt: new Date().toISOString(),
-      isMock: true // Flag to identify mock data
-    };
-    
-    this.chunkStore.set(`${metadata.streamId}_${metadata.chunkIndex}`, chunkData);
-    this.updateStreamChunks(metadata.streamId, chunkData);
-    
-    console.log(`✅ Mock chunk stored: ${mockHash}`);
-    
-    return {
-      hash: mockHash,
-      size: buffer.length,
-      uploadedAt: chunkData.uploadedAt,
-      isMock: true
-    };
   }
 
   async uploadJSON(data) {
-    if (!this.connected) {
-      const mockHash = `QmJsonMock${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
-      console.log(`📝 Mock JSON uploaded: ${mockHash}`);
-      return mockHash;
-    }
-    
     try {
+      console.log('📝 Mock uploading JSON data...');
+      
       const jsonString = JSON.stringify(data, null, 2);
       const buffer = Buffer.from(jsonString, 'utf8');
+      const mockHash = await this.storeDataLocally(buffer, 'metadata.json');
       
-      const result = await this.client.add(buffer);
-      const hash = result.cid.toString();
-      
-      console.log(`📝 JSON uploaded to IPFS: ${hash}`);
-      return hash;
+      console.log(`✅ Mock JSON uploaded: ${mockHash}`);
+      return mockHash;
       
     } catch (error) {
-      console.error('❌ IPFS JSON upload error:', error);
-      const mockHash = `QmJsonMock${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
-      return mockHash;
+      console.error('❌ Mock JSON upload error:', error);
+      throw new Error(`Mock JSON upload failed: ${error.message}`);
+    }
+  }
+
+  async uploadFile(filePath, originalName = null) {
+    try {
+      console.log(`📤 Mock uploading file: ${filePath}`);
+      
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      
+      const buffer = fs.readFileSync(filePath);
+      const filename = originalName || path.basename(filePath);
+      const mockHash = await this.storeDataLocally(buffer, filename);
+      
+      console.log(`✅ Mock file uploaded: ${mockHash} (${buffer.length} bytes)`);
+      
+      return {
+        hash: mockHash,
+        size: buffer.length,
+        filename: filename,
+        uploadedAt: new Date().toISOString(),
+        isMock: true
+      };
+      
+    } catch (error) {
+      console.error('❌ Mock file upload error:', error);
+      throw new Error(`Mock file upload failed: ${error.message}`);
     }
   }
 
@@ -155,7 +195,10 @@ class IPFSService {
         }
       }
       
+      // Sort by chunk index
       chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+      
+      console.log(`📋 Retrieved ${chunks.length} chunks for stream ${streamId}`);
       return chunks;
     } catch (error) {
       console.error('❌ Error retrieving stream chunks:', error);
@@ -165,7 +208,9 @@ class IPFSService {
 
   async getStreamMetadata(streamId) {
     try {
-      return this.streamStore.get(streamId) || null;
+      const metadata = this.streamStore.get(streamId) || null;
+      console.log(`📋 Retrieved metadata for stream ${streamId}:`, metadata ? 'Found' : 'Not found');
+      return metadata;
     } catch (error) {
       console.error('❌ Error retrieving stream metadata:', error);
       throw new Error(`Failed to retrieve stream metadata: ${error.message}`);
@@ -181,7 +226,10 @@ class IPFSService {
         }
       }
       
+      // Sort by creation date (newest first)
       userStreams.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      
+      console.log(`📋 Retrieved ${userStreams.length} streams for user ${userId}`);
       return userStreams;
     } catch (error) {
       console.error('❌ Error retrieving user streams:', error);
@@ -194,32 +242,52 @@ class IPFSService {
       let streamMetadata = this.streamStore.get(streamId);
       
       if (!streamMetadata) {
+        // Create new stream metadata
         streamMetadata = {
           id: streamId,
           userId: chunkData.userId,
-          title: `Stream ${streamId.slice(0, 8)}`,
-          description: '',
+          title: `Mock Stream ${streamId.slice(0, 8)}`,
+          description: 'Mock IPFS stream for testing',
           createdAt: new Date().toISOString(),
           status: 'active',
           chunks: [],
-          isMock: !this.connected
+          isMock: true,
+          totalSize: 0,
+          duration: 0
         };
       }
       
+      // Add or update chunk
       const existingChunkIndex = streamMetadata.chunks.findIndex(
         c => c.chunkIndex === chunkData.chunkIndex
       );
       
       if (existingChunkIndex >= 0) {
+        // Update existing chunk
+        const oldSize = streamMetadata.chunks[existingChunkIndex].size;
         streamMetadata.chunks[existingChunkIndex] = chunkData;
+        streamMetadata.totalSize = streamMetadata.totalSize - oldSize + chunkData.size;
       } else {
+        // Add new chunk
         streamMetadata.chunks.push(chunkData);
+        streamMetadata.totalSize += chunkData.size;
       }
       
+      // Sort chunks by index
       streamMetadata.chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
-      streamMetadata.lastModified = new Date().toISOString();
       
+      // Update metadata
+      streamMetadata.lastModified = new Date().toISOString();
+      streamMetadata.chunkCount = streamMetadata.chunks.length;
+      
+      // Estimate duration (assuming ~1 second per chunk)
+      streamMetadata.duration = streamMetadata.chunks.length;
+      
+      // Store updated metadata
       this.streamStore.set(streamId, streamMetadata);
+      
+      console.log(`📝 Updated stream ${streamId}: ${streamMetadata.chunks.length} chunks, ${streamMetadata.totalSize} bytes`);
+      
       return streamMetadata;
     } catch (error) {
       console.error('❌ Error updating stream chunks:', error);
@@ -228,118 +296,74 @@ class IPFSService {
   }
 
   async retrieveData(hash) {
-    if (!this.connected || hash.startsWith('QmMock')) {
-      console.log(`📥 Mock retrieving data: ${hash}`);
-      return Buffer.from('Mock data for testing', 'utf8');
-    }
-    
     try {
-      console.log(`📥 Retrieving data from IPFS: ${hash}`);
+      console.log(`📥 Mock retrieving data: ${hash}`);
       
-      const chunks = [];
-      for await (const chunk of this.client.cat(hash)) {
-        chunks.push(chunk);
+      const storedData = this.mockStorage.get(hash);
+      
+      if (!storedData) {
+        console.log(`⚠️ Mock data not found for hash: ${hash}`);
+        // Return placeholder data
+        return Buffer.from(`Mock data for hash ${hash} (not found)`, 'utf8');
       }
       
-      const buffer = Buffer.concat(chunks);
-      console.log(`✅ Retrieved ${buffer.length} bytes from IPFS`);
+      console.log(`✅ Mock retrieved ${storedData.size} bytes for hash: ${hash}`);
+      return storedData.data;
       
-      return buffer;
     } catch (error) {
-      console.error('❌ IPFS retrieval error:', error);
-      return Buffer.from('Mock data (retrieval failed)', 'utf8');
+      console.error('❌ Mock retrieval error:', error);
+      return Buffer.from(`Mock data retrieval error: ${error.message}`, 'utf8');
     }
   }
 
   async pin(hash) {
-    if (!this.connected || hash.startsWith('QmMock')) {
-      console.log(`📌 Mock pinning: ${hash}`);
-      return;
-    }
-    
-    try {
-      console.log(`📌 Pinning to IPFS: ${hash}`);
-      await this.client.pin.add(hash);
-      console.log(`✅ Successfully pinned: ${hash}`);
-    } catch (error) {
-      console.error('❌ IPFS pinning error:', error);
+    console.log(`📌 Mock pinning: ${hash}`);
+    // In a mock implementation, we just log it
+    const storedData = this.mockStorage.get(hash);
+    if (storedData) {
+      storedData.pinned = true;
+      storedData.pinnedAt = new Date().toISOString();
+      console.log(`✅ Mock pinned: ${hash}`);
+    } else {
+      console.log(`⚠️ Cannot pin non-existent hash: ${hash}`);
     }
   }
 
   async unpin(hash) {
-    if (!this.connected || hash.startsWith('QmMock')) {
-      console.log(`📌 Mock unpinning: ${hash}`);
-      return;
-    }
-    
-    try {
-      console.log(`📌 Unpinning from IPFS: ${hash}`);
-      await this.client.pin.rm(hash);
-      console.log(`✅ Successfully unpinned: ${hash}`);
-    } catch (error) {
-      console.error('❌ IPFS unpinning error (non-critical):', error);
+    console.log(`📌 Mock unpinning: ${hash}`);
+    const storedData = this.mockStorage.get(hash);
+    if (storedData) {
+      storedData.pinned = false;
+      storedData.unpinnedAt = new Date().toISOString();
+      console.log(`✅ Mock unpinned: ${hash}`);
+    } else {
+      console.log(`⚠️ Cannot unpin non-existent hash: ${hash}`);
     }
   }
 
   async getNodeInfo() {
-    if (!this.connected) {
-      return {
-        nodeId: 'mock-node-id',
-        version: 'mock-version',
-        peerCount: 0,
-        addresses: [],
-        isMock: true
-      };
-    }
-    
-    try {
-      const id = await this.client.id();
-      const version = await this.client.version();
-      const peers = await this.client.swarm.peers();
-      
-      return {
-        nodeId: id.id,
-        version: version.version,
-        peerCount: peers.length,
-        addresses: id.addresses,
-        isMock: false
-      };
-    } catch (error) {
-      console.error('❌ Error getting IPFS node info:', error);
-      return {
-        nodeId: 'error-node-id',
-        version: 'error',
-        peerCount: 0,
-        addresses: [],
-        error: error.message,
-        isMock: true
-      };
-    }
+    return {
+      nodeId: this.nodeId,
+      version: 'mock-ipfs-v1.0.0',
+      peerCount: Math.floor(Math.random() * 50) + 10, // Random peer count for realism
+      addresses: [
+        `/ip4/127.0.0.1/tcp/4001/p2p/${this.nodeId}`,
+        `/ip6/::1/tcp/4001/p2p/${this.nodeId}`
+      ],
+      isMock: true,
+      uptime: Date.now() - process.uptime() * 1000
+    };
   }
 
   async healthCheck() {
     try {
-      if (!this.connected) {
-        return {
-          status: 'mock',
-          message: 'IPFS disabled - using mock storage for deployment',
-          nodeId: 'mock-node',
-          version: 'disabled',
-          peerCount: 0,
-          lastCheck: new Date().toISOString(),
-          isMock: true
-        };
-      }
-      
       const nodeInfo = await this.getNodeInfo();
-      const testData = Buffer.from('zipIQ health check', 'utf8');
-      const result = await this.client.add(testData);
-      const hash = result.cid.toString();
       
-      const retrieved = await this.retrieveData(hash);
-      const isValid = retrieved.toString() === 'zipIQ health check';
-      
-      await this.unpin(hash);
+      // Mock health check with test data
+      const testData = Buffer.from('zipIQ mock health check', 'utf8');
+      const testHash = await this.storeDataLocally(testData, 'health-check.txt');
+      const retrieved = await this.retrieveData(testHash);
+      const isValid = retrieved.toString() === 'zipIQ mock health check';
       
       return {
         status: isValid ? 'healthy' : 'degraded',
@@ -347,10 +371,11 @@ class IPFSService {
         version: nodeInfo.version,
         peerCount: nodeInfo.peerCount,
         lastCheck: new Date().toISOString(),
-        isMock: false
+        isMock: true,
+        storageStats: this.getStorageStats()
       };
     } catch (error) {
-      console.error('❌ IPFS health check failed:', error);
+      console.error('❌ Mock health check failed:', error);
       return {
         status: 'unhealthy',
         error: error.message,
@@ -367,41 +392,57 @@ class IPFSService {
       
       let cleanedCount = 0;
       
+      // Clean up chunk store
       for (const [key, chunkData] of this.chunkStore.entries()) {
         const chunkDate = new Date(chunkData.uploadedAt);
         
         if (chunkDate < cutoffDate) {
-          if (this.connected && !chunkData.ipfsHash.startsWith('QmMock')) {
-            await this.unpin(chunkData.ipfsHash);
+          // Remove from mock storage
+          this.mockStorage.delete(chunkData.ipfsHash);
+          
+          // Remove local file if it exists
+          if (chunkData.localPath && fs.existsSync(chunkData.localPath)) {
+            try {
+              fs.unlinkSync(chunkData.localPath);
+            } catch (err) {
+              console.log(`⚠️ Could not delete local file: ${chunkData.localPath}`);
+            }
           }
           
+          // Remove from chunk store
           this.chunkStore.delete(key);
           cleanedCount++;
         }
       }
       
-      console.log(`🧹 Cleaned up ${cleanedCount} old chunks`);
+      // Clean up orphaned mock storage
+      for (const [hash, data] of this.mockStorage.entries()) {
+        const dataDate = new Date(data.storedAt);
+        if (dataDate < cutoffDate) {
+          this.mockStorage.delete(hash);
+        }
+      }
+      
+      console.log(`🧹 Mock cleanup completed: ${cleanedCount} chunks removed`);
       return cleanedCount;
     } catch (error) {
-      console.error('❌ Error during cleanup:', error);
-      throw new Error(`Cleanup failed: ${error.message}`);
+      console.error('❌ Error during mock cleanup:', error);
+      throw new Error(`Mock cleanup failed: ${error.message}`);
     }
   }
 
   getStorageStats() {
     const totalChunks = this.chunkStore.size;
     const totalStreams = this.streamStore.size;
+    const totalMockData = this.mockStorage.size;
     
     let totalSize = 0;
-    let mockChunks = 0;
+    let pinnedCount = 0;
     const chunksByStream = new Map();
     
+    // Calculate chunk statistics
     for (const [key, chunkData] of this.chunkStore.entries()) {
       totalSize += chunkData.size;
-      
-      if (chunkData.isMock || chunkData.ipfsHash.startsWith('QmMock')) {
-        mockChunks++;
-      }
       
       if (!chunksByStream.has(chunkData.streamId)) {
         chunksByStream.set(chunkData.streamId, 0);
@@ -409,18 +450,51 @@ class IPFSService {
       chunksByStream.set(chunkData.streamId, chunksByStream.get(chunkData.streamId) + 1);
     }
     
+    // Count pinned items
+    for (const [hash, data] of this.mockStorage.entries()) {
+      if (data.pinned) {
+        pinnedCount++;
+      }
+    }
+    
     return {
       connected: this.connected,
+      isMock: true,
       totalChunks,
       totalStreams,
+      totalMockData,
       totalSize,
-      mockChunks,
-      realChunks: totalChunks - mockChunks,
+      pinnedCount,
       averageChunkSize: totalChunks > 0 ? Math.round(totalSize / totalChunks) : 0,
       chunksPerStream: totalStreams > 0 ? Math.round(totalChunks / totalStreams) : 0,
-      memoryUsage: process.memoryUsage()
+      uploadsDirectory: this.uploadsDir,
+      memoryUsage: process.memoryUsage(),
+      nodeId: this.nodeId
+    };
+  }
+
+  // Utility method to list all stored hashes
+  listAllHashes() {
+    return Array.from(this.mockStorage.keys());
+  }
+
+  // Utility method to get detailed info about a hash
+  getHashInfo(hash) {
+    const data = this.mockStorage.get(hash);
+    if (!data) return null;
+    
+    return {
+      hash,
+      size: data.size,
+      filename: data.filename,
+      mimetype: data.mimetype,
+      storedAt: data.storedAt,
+      pinned: data.pinned || false,
+      pinnedAt: data.pinnedAt,
+      unpinnedAt: data.unpinnedAt
     };
   }
 }
 
-module.exports = new IPFSService();
+// Export as singleton
+module.exports = new MockIPFSService();
