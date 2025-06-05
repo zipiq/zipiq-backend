@@ -1,0 +1,39 @@
+# CRITICAL: Environment files with secrets
+.env
+.env.local
+.env.production
+.env.staging
+.env.development
+.env.test
+
+# Database files (may contain user data)
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Private keys and certificates
+*.key
+*.pem
+*.p12
+*.crt
+keys/
+wallet.json
+keyfile.json
+
+# Logs (may contain sensitive data)
+logs/
+*.log
+
+# Dependencies
+node_modules/
+
+# OS and IDE files
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/
+*.bak
