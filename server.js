@@ -42,37 +42,91 @@ const limiter = rateLimit({
 
 app.use('/api/', limiter);
 
-// CORS configuration
+// UPDATED CORS configuration - Fix for iOS mobile app
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps)
-    if (!origin) return callback(null, true);
+    // Always allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
+      console.log('🔍 CORS: Allowing request with no origin (mobile app)');
+      return callback(null, true);
+    }
     
+    // Get allowed origins from environment variable
     const allowedOrigins = process.env.ALLOWED_ORIGINS 
-      ? process.env.ALLOWED_ORIGINS.split(',')
+      ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
       : ['*'];
     
-    if (allowedOrigins.includes('*') || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+    console.log('🔍 CORS: Checking origin:', origin);
+    console.log('🔍 CORS: Allowed origins:', allowedOrigins);
+    
+    // Always allow if wildcard is set
+    if (allowedOrigins.includes('*')) {
+      console.log('✅ CORS: Allowing all origins (wildcard)');
+      return callback(null, true);
     }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      console.log('✅ CORS: Origin allowed');
+      return callback(null, true);
+    }
+    
+    // For development, be more permissive
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('✅ CORS: Development mode - allowing origin');
+      return callback(null, true);
+    }
+    
+    console.log('❌ CORS: Origin not allowed');
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  // Explicitly allow common headers that iOS might send
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With', 
+    'Content-Type', 
+    'Accept',
+    'Authorization',
+    'Cache-Control',
+    'Pragma',
+    'User-Agent',
+    'DNT',
+    'If-Modified-Since',
+    'Keep-Alive',
+    'X-CustomHeader'
+  ],
+  // Allow all common HTTP methods
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH']
 };
 
 app.use(cors(corsOptions));
+
+// Add preflight handling for all routes
+app.options('*', cors(corsOptions));
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging
+// Enhanced request logging with CORS debugging
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
   const ip = req.ip || req.connection.remoteAddress;
-  console.log(`${timestamp} - ${req.method} ${req.path} - IP: ${ip}`);
+  const origin = req.get('Origin') || 'no-origin';
+  const userAgent = req.get('User-Agent') || 'no-user-agent';
+  
+  console.log(`${timestamp} - ${req.method} ${req.path}`);
+  console.log(`   IP: ${ip}`);
+  console.log(`   Origin: ${origin}`);
+  console.log(`   User-Agent: ${userAgent.substring(0, 100)}...`);
+  
+  // Log request headers for debugging
+  if (req.method === 'OPTIONS') {
+    console.log('🔍 PREFLIGHT REQUEST - Headers:', JSON.stringify(req.headers, null, 2));
+  }
+  
   next();
 });
 
@@ -183,6 +237,7 @@ app.get('/api/v1/health', async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('❌ Health check error:', error);
     res.status(500).json({
       status: 'ERROR',
       message: 'Health check failed',
@@ -360,7 +415,12 @@ server.listen(PORT, () => {
   console.log('   1. Update your iOS app baseURL to this server');
   console.log('   2. Test authentication endpoints');
   console.log('   3. Test live streaming functionality');
-  console.log('   4. Deploy to Akash Network for decentralization\n');
+  console.log('   4. Deploy to Akash Network for decentralization');
+  console.log('\n🔧 CORS Configuration:');
+  console.log('   • Mobile apps (no origin): ✅ Allowed');
+  console.log('   • Development mode: ✅ Permissive');
+  console.log('   • Preflight requests: ✅ Handled');
+  console.log('   • Custom headers: ✅ Supported\n');
 });
 
 module.exports = { app, server, io };
