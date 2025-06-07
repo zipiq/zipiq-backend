@@ -1,331 +1,436 @@
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const path = require('path');
 
-const dbPath = path.join(__dirname, '..', process.env.DATABASE_PATH || 'data/zipiq.db');
+// Database connection configuration
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: 20, // Maximum pool size
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
 
-// Ensure data directory exists
-const fs = require('fs');
-const dataDir = path.dirname(dbPath);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
+// Database initialization
+const initializeDatabase = async () => {
+  try {
+    const client = await pool.connect();
+    console.log('📁 Connected to PostgreSQL database');
 
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('❌ Error opening database:', err.message);
-  } else {
-    console.log('📁 Connected to SQLite database:', dbPath);
+    // Create users table with Web3 features
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        username VARCHAR(255) UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        first_name VARCHAR(255),
+        last_name VARCHAR(255),
+        wallet_address VARCHAR(255),
+        is_verified BOOLEAN DEFAULT FALSE,
+        is_active BOOLEAN DEFAULT TRUE,
+        profile_image_url TEXT,
+        bio TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP,
+        verification_token TEXT,
+        reset_password_token TEXT,
+        reset_password_expires TIMESTAMP
+      )
+    `);
+    console.log('✅ Users table ready');
+
+    // Create streams table for tracking user streams
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS streams (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        is_private BOOLEAN DEFAULT FALSE,
+        status TEXT DEFAULT 'created',
+        metadata_hash TEXT,
+        chunk_count INTEGER DEFAULT 0,
+        total_size BIGINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+      )
+    `);
+    console.log('✅ Streams table ready');
+
+    // Create chunks table for tracking stream chunks
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chunks (
+        id TEXT PRIMARY KEY,
+        stream_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        ipfs_hash TEXT NOT NULL,
+        arweave_tx_id TEXT,
+        size BIGINT NOT NULL,
+        timestamp BIGINT NOT NULL,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        archived_at TIMESTAMP,
+        status TEXT DEFAULT 'uploaded',
+        FOREIGN KEY (stream_id) REFERENCES streams (id) ON DELETE CASCADE,
+        UNIQUE(stream_id, chunk_index)
+      )
+    `);
+    console.log('✅ Chunks table ready');
+
+    // Create indexes for better performance
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+      CREATE INDEX IF NOT EXISTS idx_streams_user_id ON streams(user_id);
+      CREATE INDEX IF NOT EXISTS idx_chunks_stream_id ON chunks(stream_id);
+    `);
+    console.log('✅ Database indexes ready');
+
+    client.release();
+  } catch (err) {
+    console.error('❌ Error initializing database:', err.message);
+    throw err;
   }
-});
+};
 
-// Create users table with Web3 features
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      first_name TEXT,
-      last_name TEXT,
-      wallet_address TEXT,
-      is_verified BOOLEAN DEFAULT 0,
-      is_active BOOLEAN DEFAULT 1,
-      profile_image_url TEXT,
-      bio TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_login DATETIME,
-      verification_token TEXT,
-      reset_password_token TEXT,
-      reset_password_expires DATETIME
-    )
-  `, (err) => {
-    if (err) {
-      console.error('❌ Error creating users table:', err.message);
-    } else {
-      console.log('✅ Users table ready');
-    }
-  });
+// Initialize database on startup
+initializeDatabase().catch(console.error);
 
-  // Create streams table for tracking user streams
-  db.run(`
-    CREATE TABLE IF NOT EXISTS streams (
-      id TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      description TEXT,
-      is_private BOOLEAN DEFAULT 0,
-      status TEXT DEFAULT 'created',
-      metadata_hash TEXT,
-      chunk_count INTEGER DEFAULT 0,
-      total_size INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-    )
-  `, (err) => {
-    if (err) {
-      console.error('❌ Error creating streams table:', err.message);
-    } else {
-      console.log('✅ Streams table ready');
-    }
-  });
+// Helper function to convert PostgreSQL callback style to SQLite-compatible style
+const executeQuery = async (query, params = []) => {
+  try {
+    const result = await pool.query(query, params);
+    return result;
+  } catch (error) {
+    throw error;
+  }
+};
 
-  // Create chunks table for tracking stream chunks
-  db.run(`
-    CREATE TABLE IF NOT EXISTS chunks (
-      id TEXT PRIMARY KEY,
-      stream_id TEXT NOT NULL,
-      chunk_index INTEGER NOT NULL,
-      ipfs_hash TEXT NOT NULL,
-      arweave_tx_id TEXT,
-      size INTEGER NOT NULL,
-      timestamp INTEGER NOT NULL,
-      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      archived_at DATETIME,
-      status TEXT DEFAULT 'uploaded',
-      FOREIGN KEY (stream_id) REFERENCES streams (id) ON DELETE CASCADE,
-      UNIQUE(stream_id, chunk_index)
-    )
-  `, (err) => {
-    if (err) {
-      console.error('❌ Error creating chunks table:', err.message);
-    } else {
-      console.log('✅ Chunks table ready');
-    }
-  });
-});
-
-// User model methods
+// User model methods (keeping same interface as SQLite version)
 const UserModel = {
   // Create a new user
-  create: (userData, callback) => {
-    const { email, username, passwordHash, firstName, lastName } = userData;
-    const sql = `
-      INSERT INTO users (email, username, password_hash, first_name, last_name)
-      VALUES (?, ?, ?, ?, ?)
-    `;
-    db.run(sql, [email, username, passwordHash, firstName || null, lastName || null], function(err) {
-      if (err) {
-        callback(err, null);
-      } else {
-        callback(null, { id: this.lastID, ...userData });
-      }
-    });
+  create: async (userData, callback) => {
+    try {
+      const { email, username, passwordHash, firstName, lastName } = userData;
+      const query = `
+        INSERT INTO users (email, username, password_hash, first_name, last_name)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, email, username, first_name, last_name, created_at
+      `;
+      const result = await executeQuery(query, [email, username, passwordHash, firstName || null, lastName || null]);
+      const user = result.rows[0];
+      callback(null, { id: user.id, ...userData });
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Find user by email
-  findByEmail: (email, callback) => {
-    const sql = 'SELECT * FROM users WHERE email = ? AND is_active = 1';
-    db.get(sql, [email], callback);
+  findByEmail: async (email, callback) => {
+    try {
+      const query = 'SELECT * FROM users WHERE email = $1 AND is_active = TRUE';
+      const result = await executeQuery(query, [email]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Find user by username
-  findByUsername: (username, callback) => {
-    const sql = 'SELECT * FROM users WHERE username = ? AND is_active = 1';
-    db.get(sql, [username], callback);
+  findByUsername: async (username, callback) => {
+    try {
+      const query = 'SELECT * FROM users WHERE username = $1 AND is_active = TRUE';
+      const result = await executeQuery(query, [username]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Find user by ID
-  findById: (id, callback) => {
-    const sql = 'SELECT * FROM users WHERE id = ? AND is_active = 1';
-    db.get(sql, [id], callback);
+  findById: async (id, callback) => {
+    try {
+      const query = 'SELECT * FROM users WHERE id = $1 AND is_active = TRUE';
+      const result = await executeQuery(query, [id]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Check if email or username exists
-  checkExists: (email, username, callback) => {
-    const sql = 'SELECT id FROM users WHERE (email = ? OR username = ?) AND is_active = 1';
-    db.get(sql, [email, username], callback);
+  checkExists: async (email, username, callback) => {
+    try {
+      const query = 'SELECT id FROM users WHERE (email = $1 OR username = $2) AND is_active = TRUE';
+      const result = await executeQuery(query, [email, username]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Update user last login
-  updateLastLogin: (userId, callback) => {
-    const sql = 'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?';
-    db.run(sql, [userId], callback);
+  updateLastLogin: async (userId, callback) => {
+    try {
+      const query = 'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1';
+      await executeQuery(query, [userId]);
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
   },
 
   // Get user profile (excluding sensitive data)
-  getProfile: (userId, callback) => {
-    const sql = `
-      SELECT id, email, username, first_name, last_name, wallet_address, 
-             is_verified, profile_image_url, bio, created_at, last_login
-      FROM users 
-      WHERE id = ? AND is_active = 1
-    `;
-    db.get(sql, [userId], callback);
+  getProfile: async (userId, callback) => {
+    try {
+      const query = `
+        SELECT id, email, username, first_name, last_name, wallet_address, 
+               is_verified, profile_image_url, bio, created_at, last_login
+        FROM users 
+        WHERE id = $1 AND is_active = TRUE
+      `;
+      const result = await executeQuery(query, [userId]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Update user profile
-  updateProfile: (userId, updateData, callback) => {
-    const fields = [];
-    const values = [];
-    
-    Object.keys(updateData).forEach(key => {
-      if (updateData[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(updateData[key]);
+  updateProfile: async (userId, updateData, callback) => {
+    try {
+      const fields = [];
+      const values = [];
+      let paramCounter = 1;
+      
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] !== undefined) {
+          fields.push(`${key} = $${paramCounter}`);
+          values.push(updateData[key]);
+          paramCounter++;
+        }
+      });
+      
+      if (fields.length === 0) {
+        return callback(new Error('No fields to update'), null);
       }
-    });
-    
-    if (fields.length === 0) {
-      return callback(new Error('No fields to update'), null);
+      
+      fields.push(`updated_at = CURRENT_TIMESTAMP`);
+      values.push(userId);
+      
+      const query = `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramCounter}`;
+      await executeQuery(query, values);
+      callback(null);
+    } catch (err) {
+      callback(err);
     }
-    
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(userId);
-    
-    const sql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
-    db.run(sql, values, callback);
   },
 
   // Get user statistics
-  getUserStats: (userId, callback) => {
-    const sql = `
-      SELECT 
-        u.id,
-        u.username,
-        u.created_at,
-        COUNT(s.id) as total_streams,
-        COALESCE(SUM(s.chunk_count), 0) as total_chunks,
-        COALESCE(SUM(s.total_size), 0) as total_size
-      FROM users u
-      LEFT JOIN streams s ON u.id = s.user_id
-      WHERE u.id = ? AND u.is_active = 1
-      GROUP BY u.id
-    `;
-    db.get(sql, [userId], callback);
+  getUserStats: async (userId, callback) => {
+    try {
+      const query = `
+        SELECT 
+          u.id,
+          u.username,
+          u.created_at,
+          COUNT(s.id) as total_streams,
+          COALESCE(SUM(s.chunk_count), 0) as total_chunks,
+          COALESCE(SUM(s.total_size), 0) as total_size
+        FROM users u
+        LEFT JOIN streams s ON u.id = s.user_id
+        WHERE u.id = $1 AND u.is_active = TRUE
+        GROUP BY u.id, u.username, u.created_at
+      `;
+      const result = await executeQuery(query, [userId]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   }
 };
 
 // Stream model methods
 const StreamModel = {
   // Create a new stream
-  create: (streamData, callback) => {
-    const { id, userId, title, description, isPrivate, metadataHash } = streamData;
-    const sql = `
-      INSERT INTO streams (id, user_id, title, description, is_private, metadata_hash)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-    db.run(sql, [id, userId, title, description, isPrivate ? 1 : 0, metadataHash], function(err) {
-      if (err) {
-        callback(err, null);
-      } else {
-        callback(null, { id, ...streamData });
-      }
-    });
+  create: async (streamData, callback) => {
+    try {
+      const { id, userId, title, description, isPrivate, metadataHash } = streamData;
+      const query = `
+        INSERT INTO streams (id, user_id, title, description, is_private, metadata_hash)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `;
+      const result = await executeQuery(query, [id, userId, title, description, isPrivate ? true : false, metadataHash]);
+      callback(null, { id, ...streamData });
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Find stream by ID
-  findById: (streamId, callback) => {
-    const sql = 'SELECT * FROM streams WHERE id = ?';
-    db.get(sql, [streamId], callback);
+  findById: async (streamId, callback) => {
+    try {
+      const query = 'SELECT * FROM streams WHERE id = $1';
+      const result = await executeQuery(query, [streamId]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Get user's streams
-  findByUserId: (userId, callback) => {
-    const sql = `
-      SELECT s.*, COUNT(c.id) as chunk_count, COALESCE(SUM(c.size), 0) as total_size
-      FROM streams s
-      LEFT JOIN chunks c ON s.id = c.stream_id
-      WHERE s.user_id = ?
-      GROUP BY s.id
-      ORDER BY s.created_at DESC
-    `;
-    db.all(sql, [userId], callback);
+  findByUserId: async (userId, callback) => {
+    try {
+      const query = `
+        SELECT s.*, COUNT(c.id) as chunk_count, COALESCE(SUM(c.size), 0) as total_size
+        FROM streams s
+        LEFT JOIN chunks c ON s.id = c.stream_id
+        WHERE s.user_id = $1
+        GROUP BY s.id, s.user_id, s.title, s.description, s.is_private, s.status, s.metadata_hash, s.chunk_count, s.total_size, s.created_at, s.updated_at
+        ORDER BY s.created_at DESC
+      `;
+      const result = await executeQuery(query, [userId]);
+      callback(null, result.rows);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Update stream
-  update: (streamId, updateData, callback) => {
-    const fields = [];
-    const values = [];
-    
-    Object.keys(updateData).forEach(key => {
-      if (updateData[key] !== undefined) {
-        fields.push(`${key} = ?`);
-        values.push(updateData[key]);
+  update: async (streamId, updateData, callback) => {
+    try {
+      const fields = [];
+      const values = [];
+      let paramCounter = 1;
+      
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] !== undefined) {
+          fields.push(`${key} = $${paramCounter}`);
+          values.push(updateData[key]);
+          paramCounter++;
+        }
+      });
+      
+      if (fields.length === 0) {
+        return callback(new Error('No fields to update'), null);
       }
-    });
-    
-    if (fields.length === 0) {
-      return callback(new Error('No fields to update'), null);
+      
+      fields.push(`updated_at = CURRENT_TIMESTAMP`);
+      values.push(streamId);
+      
+      const query = `UPDATE streams SET ${fields.join(', ')} WHERE id = $${paramCounter}`;
+      await executeQuery(query, values);
+      callback(null);
+    } catch (err) {
+      callback(err);
     }
-    
-    fields.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(streamId);
-    
-    const sql = `UPDATE streams SET ${fields.join(', ')} WHERE id = ?`;
-    db.run(sql, values, callback);
   }
 };
 
 // Chunk model methods
 const ChunkModel = {
   // Create a new chunk
-  create: (chunkData, callback) => {
-    const { id, streamId, chunkIndex, ipfsHash, size, timestamp } = chunkData;
-    const sql = `
-      INSERT INTO chunks (id, stream_id, chunk_index, ipfs_hash, size, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-    db.run(sql, [id, streamId, chunkIndex, ipfsHash, size, timestamp], function(err) {
-      if (err) {
-        callback(err, null);
-      } else {
-        // Update stream chunk count and total size
-        ChunkModel.updateStreamStats(streamId, () => {});
-        callback(null, { id, ...chunkData });
-      }
-    });
+  create: async (chunkData, callback) => {
+    try {
+      const { id, streamId, chunkIndex, ipfsHash, size, timestamp } = chunkData;
+      const query = `
+        INSERT INTO chunks (id, stream_id, chunk_index, ipfs_hash, size, timestamp)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `;
+      await executeQuery(query, [id, streamId, chunkIndex, ipfsHash, size, timestamp]);
+      
+      // Update stream chunk count and total size
+      ChunkModel.updateStreamStats(streamId, () => {});
+      callback(null, { id, ...chunkData });
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Find chunks by stream ID
-  findByStreamId: (streamId, callback) => {
-    const sql = `
-      SELECT * FROM chunks 
-      WHERE stream_id = ? 
-      ORDER BY chunk_index ASC
-    `;
-    db.all(sql, [streamId], callback);
+  findByStreamId: async (streamId, callback) => {
+    try {
+      const query = `
+        SELECT * FROM chunks 
+        WHERE stream_id = $1 
+        ORDER BY chunk_index ASC
+      `;
+      const result = await executeQuery(query, [streamId]);
+      callback(null, result.rows);
+    } catch (err) {
+      callback(err, null);
+    }
   },
 
   // Update chunk with Arweave transaction ID
-  updateArweaveStatus: (chunkId, arweaveTxId, callback) => {
-    const sql = `
-      UPDATE chunks 
-      SET arweave_tx_id = ?, archived_at = CURRENT_TIMESTAMP, status = 'archived'
-      WHERE id = ?
-    `;
-    db.run(sql, [arweaveTxId, chunkId], callback);
+  updateArweaveStatus: async (chunkId, arweaveTxId, callback) => {
+    try {
+      const query = `
+        UPDATE chunks 
+        SET arweave_tx_id = $1, archived_at = CURRENT_TIMESTAMP, status = 'archived'
+        WHERE id = $2
+      `;
+      await executeQuery(query, [arweaveTxId, chunkId]);
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
   },
 
   // Update stream statistics
-  updateStreamStats: (streamId, callback) => {
-    const sql = `
-      UPDATE streams 
-      SET 
-        chunk_count = (SELECT COUNT(*) FROM chunks WHERE stream_id = ?),
-        total_size = (SELECT COALESCE(SUM(size), 0) FROM chunks WHERE stream_id = ?),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `;
-    db.run(sql, [streamId, streamId, streamId], callback);
+  updateStreamStats: async (streamId, callback) => {
+    try {
+      const query = `
+        UPDATE streams 
+        SET 
+          chunk_count = (SELECT COUNT(*) FROM chunks WHERE stream_id = $1),
+          total_size = (SELECT COALESCE(SUM(size), 0) FROM chunks WHERE stream_id = $2),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+      `;
+      await executeQuery(query, [streamId, streamId, streamId]);
+      callback(null);
+    } catch (err) {
+      callback(err);
+    }
   },
 
   // Get chunk statistics
-  getStreamStats: (streamId, callback) => {
-    const sql = `
-      SELECT 
-        COUNT(*) as total_chunks,
-        COALESCE(SUM(size), 0) as total_size,
-        COUNT(CASE WHEN arweave_tx_id IS NOT NULL THEN 1 END) as archived_chunks,
-        MIN(timestamp) as start_time,
-        MAX(timestamp) as end_time
-      FROM chunks 
-      WHERE stream_id = ?
-    `;
-    db.get(sql, [streamId], callback);
+  getStreamStats: async (streamId, callback) => {
+    try {
+      const query = `
+        SELECT 
+          COUNT(*) as total_chunks,
+          COALESCE(SUM(size), 0) as total_size,
+          COUNT(CASE WHEN arweave_tx_id IS NOT NULL THEN 1 END) as archived_chunks,
+          MIN(timestamp) as start_time,
+          MAX(timestamp) as end_time
+        FROM chunks 
+        WHERE stream_id = $1
+      `;
+      const result = await executeQuery(query, [streamId]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      callback(err, null);
+    }
   }
+};
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('🔄 Shutting down PostgreSQL connection pool...');
+  await pool.end();
+  console.log('✅ PostgreSQL connection pool closed');
+  process.exit(0);
+});
+
+// Export database pool for direct queries if needed
+const db = {
+  query: (text, params) => pool.query(text, params),
+  getClient: () => pool.connect()
 };
 
 module.exports = { db, UserModel, StreamModel, ChunkModel };
