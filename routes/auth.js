@@ -284,6 +284,293 @@ router.get('/profile', authenticateToken, (req, res) => {
 });
 
 // ==============================================
+// PASSWORD RESET ENDPOINTS
+// ==============================================
+
+// POST /auth/forgot-password - Request password reset
+router.post('/forgot-password', [
+  body('email').isEmail().normalizeEmail()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid email address is required'
+      });
+    }
+
+    const { email } = req.body;
+
+    // Find user by email
+    UserModel.findByEmail(email, async (err, user) => {
+      if (err) {
+        console.error('Database error in forgot password:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Internal server error'
+        });
+      }
+
+      // Always return success for security (don't reveal if email exists)
+      const successResponse = {
+        success: true,
+        message: 'If an account with that email exists, we have sent a password reset link.'
+      };
+
+      if (!user) {
+        // User doesn't exist, but don't reveal this information
+        return res.json(successResponse);
+      }
+
+      try {
+        // Generate secure reset token
+        const crypto = require('crypto');
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        
+        // Set expiration time (1 hour from now)
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + 1);
+
+        // Save token to database
+        UserModel.setPasswordResetToken(email, resetToken, expiresAt, async (err, updatedUser) => {
+          if (err) {
+            console.error('Error saving reset token:', err);
+            return res.status(500).json({
+              success: false,
+              message: 'Internal server error'
+            });
+          }
+
+          try {
+            // Send password reset email
+            const nodemailer = require('nodemailer');
+            
+            const transporter = nodemailer.createTransport({
+              host: process.env.SMTP_HOST,
+              port: parseInt(process.env.SMTP_PORT),
+              secure: false,
+              auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS
+              }
+            });
+
+            // Create reset URL (you'll need to update this with your actual frontend URL)
+            const resetUrl = `${process.env.FRONTEND_URL || 'https://zipiq.com'}/reset-password?token=${resetToken}`;
+
+            const emailOptions = {
+              from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
+              to: email,
+              subject: 'Reset Your zipIQ Password',
+              html: createPasswordResetEmailHTML(user.username || 'there', resetUrl, resetToken)
+            };
+
+            await transporter.sendMail(emailOptions);
+            
+            console.log(`✅ Password reset email sent to ${email}`);
+            res.json(successResponse);
+
+          } catch (emailError) {
+            console.error('Error sending password reset email:', emailError);
+            // Still return success to user for security
+            res.json(successResponse);
+          }
+        });
+
+      } catch (tokenError) {
+        console.error('Error generating reset token:', tokenError);
+        res.status(500).json({
+          success: false,
+          message: 'Internal server error'
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// POST /auth/reset-password - Reset password with token
+router.post('/reset-password', [
+  body('token').isLength({ min: 1 }),
+  body('password').isLength({ min: 8 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid token and password (minimum 8 characters) are required'
+      });
+    }
+
+    const { token, password } = req.body;
+
+    // Find user by reset token
+    UserModel.findByResetToken(token, async (err, user) => {
+      if (err) {
+        console.error('Database error in reset password:', err);
+        return res.status(500).json({
+          success: false,
+          message: 'Internal server error'
+        });
+      }
+
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired reset token'
+        });
+      }
+
+      try {
+        // Hash new password
+        const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12;
+        const newPasswordHash = await bcrypt.hash(password, saltRounds);
+
+        // Update password and clear reset token
+        UserModel.updatePasswordWithToken(token, newPasswordHash, (err, updatedUser) => {
+          if (err) {
+            console.error('Error updating password:', err);
+            return res.status(500).json({
+              success: false,
+              message: 'Internal server error'
+            });
+          }
+
+          if (!updatedUser) {
+            return res.status(400).json({
+              success: false,
+              message: 'Invalid or expired reset token'
+            });
+          }
+
+          console.log(`✅ Password successfully reset for user: ${updatedUser.email}`);
+          
+          res.json({
+            success: true,
+            message: 'Password has been reset successfully. You can now log in with your new password.'
+          });
+        });
+
+      } catch (hashError) {
+        console.error('Error hashing new password:', hashError);
+        res.status(500).json({
+          success: false,
+          message: 'Internal server error'
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /auth/validate-reset-token/:token - Validate reset token
+router.get('/validate-reset-token/:token', (req, res) => {
+  const { token } = req.params;
+
+  if (!token) {
+    return res.status(400).json({
+      success: false,
+      message: 'Reset token is required'
+    });
+  }
+
+  UserModel.findByResetToken(token, (err, user) => {
+    if (err) {
+      console.error('Database error in validate token:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Reset token is valid',
+      data: {
+        email: user.email,
+        expiresAt: user.reset_password_expires
+      }
+    });
+  });
+});
+
+// ==============================================
+// EMAIL TEMPLATE FUNCTION
+// ==============================================
+
+function createPasswordResetEmailHTML(username, resetUrl, token) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #333; margin-bottom: 10px;">Reset Your zipIQ Password</h1>
+        <p style="color: #666; font-size: 16px;">We received a request to reset your password</p>
+      </div>
+      
+      <div style="background-color: #f9f9f9; padding: 30px; border-radius: 10px; margin-bottom: 30px;">
+        <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Hi ${username},</p>
+        <p style="color: #333; font-size: 16px; margin-bottom: 20px;">
+          Someone requested a password reset for your zipIQ account. If this was you, 
+          click the button below to create a new password:
+        </p>
+        
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetUrl}" 
+             style="background-color: #007bff; color: white; padding: 15px 30px; 
+                    text-decoration: none; border-radius: 5px; font-size: 16px; 
+                    font-weight: bold; display: inline-block;">
+            Reset My Password
+          </a>
+        </div>
+        
+        <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+          If the button doesn't work, copy and paste this link into your browser:
+        </p>
+        <p style="word-break: break-all; color: #007bff; font-size: 14px; margin-bottom: 20px;">
+          ${resetUrl}
+        </p>
+        
+        <div style="border-top: 1px solid #ddd; padding-top: 20px; margin-top: 20px;">
+          <p style="color: #d9534f; font-size: 14px; font-weight: bold; margin-bottom: 10px;">
+            ⚠️ This link will expire in 1 hour
+          </p>
+          <p style="color: #666; font-size: 14px;">
+            If you didn't request this password reset, please ignore this email. 
+            Your password will remain unchanged.
+          </p>
+        </div>
+      </div>
+      
+      <div style="text-align: center; color: #999; font-size: 12px; border-top: 1px solid #eee; padding-top: 20px;">
+        <p>This email was sent by zipIQ Security System</p>
+        <p>If you have questions, contact support at support@zipiq.com</p>
+      </div>
+    </div>
+  `;
+}
+
+
+// ==============================================
 // TEMPORARY TEST ENDPOINTS FOR EMAIL SETUP
 // ==============================================
 
