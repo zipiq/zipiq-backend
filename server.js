@@ -14,6 +14,8 @@ const streamRoutes = require('./routes/stream');
 const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
+// Fix for Railway proxy setup - add this line
+app.set('trust proxy', true);
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
@@ -27,7 +29,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// Rate limiting
+// Rate limiting - UPDATED for Railway
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.MAX_REQUESTS_PER_WINDOW) || 100,
@@ -38,6 +40,10 @@ const limiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  // Add this for Railway compatibility
+  trustProxy: true,
+  // Skip rate limiting for health checks
+  skip: (req) => req.path === '/api/v1/health'
 });
 
 app.use('/api/', limiter);
