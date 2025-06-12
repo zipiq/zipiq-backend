@@ -40,6 +40,20 @@ const initializeDatabase = async () => {
     `);
     console.log('✅ Users table ready');
 
+    // Add password reset columns to existing users table
+    await client.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS reset_password_token TEXT,
+      ADD COLUMN IF NOT EXISTS reset_password_expires TIMESTAMP
+    `);
+    console.log('✅ Password reset columns added to users table');
+
+    // Add index for faster token lookups
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_password_token);
+    `);
+    console.log('✅ Password reset token index created');
+
     // Create streams table for tracking user streams
     await client.query(`
       CREATE TABLE IF NOT EXISTS streams (
