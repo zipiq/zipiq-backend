@@ -262,7 +262,101 @@ const UserModel = {
     } catch (err) {
       callback(err, null);
     }
+  },
+
+  // ==============================================
+  // PASSWORD RESET METHODS
+  // ==============================================
+
+  // Set password reset token for a user
+  setPasswordResetToken: async (email, token, expiresAt, callback) => {
+    try {
+      const query = `
+        UPDATE users 
+        SET reset_password_token = $1, 
+            reset_password_expires = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE email = $3 AND is_active = TRUE
+        RETURNING id, email, username, first_name, last_name
+      `;
+      const result = await executeQuery(query, [token, expiresAt, email]);
+      
+      if (result.rows.length === 0) {
+        return callback(new Error('User not found'), null);
+      }
+      
+      callback(null, result.rows[0]);
+    } catch (err) {
+      console.error('Error setting password reset token:', err);
+      callback(err, null);
+    }
+  },
+
+  // Find user by valid reset token (not expired)
+  findByResetToken: async (token, callback) => {
+    try {
+      const query = `
+        SELECT id, email, username, first_name, last_name, 
+               reset_password_token, reset_password_expires
+        FROM users 
+        WHERE reset_password_token = $1 
+        AND reset_password_expires > CURRENT_TIMESTAMP 
+        AND is_active = TRUE
+      `;
+      const result = await executeQuery(query, [token]);
+      callback(null, result.rows[0] || null);
+    } catch (err) {
+      console.error('Error finding user by reset token:', err);
+      callback(err, null);
+    }
+  },
+
+  // Update password using reset token and clear the token
+  updatePasswordWithToken: async (token, newPasswordHash, callback) => {
+    try {
+      const query = `
+        UPDATE users 
+        SET password_hash = $1, 
+            reset_password_token = NULL, 
+            reset_password_expires = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE reset_password_token = $2 
+        AND reset_password_expires > CURRENT_TIMESTAMP 
+        AND is_active = TRUE
+        RETURNING id, email, username, first_name, last_name
+      `;
+      const result = await executeQuery(query, [newPasswordHash, token]);
+      
+      if (result.rows.length === 0) {
+        return callback(new Error('Invalid or expired reset token'), null);
+      }
+      
+      callback(null, result.rows[0]);
+    } catch (err) {
+      console.error('Error updating password with token:', err);
+      callback(err, null);
+    }
+  },
+
+  // Clean up expired reset tokens (optional - for maintenance)
+  cleanupExpiredResetTokens: async (callback) => {
+    try {
+      const query = `
+        UPDATE users 
+        SET reset_password_token = NULL, 
+            reset_password_expires = NULL
+        WHERE reset_password_expires < CURRENT_TIMESTAMP 
+        AND reset_password_token IS NOT NULL
+      `;
+      const result = await executeQuery(query);
+      console.log(`Cleaned up ${result.rowCount} expired reset tokens`);
+      callback(null, result.rowCount);
+    } catch (err) {
+      console.error('Error cleaning up expired tokens:', err);
+      callback(err, null);
+    }
   }
+
 };
 
 // Stream model methods
