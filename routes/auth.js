@@ -382,7 +382,7 @@ router.get('/test-send-email', async (req, res) => {
     // Test email content
     const testEmailOptions = {
       from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
-      to: 'your-test-email@gmail.com', // TODO: Replace with your actual email for testing
+      to: 'wbowman@zipiq.com', // Will Bowman's email for testing
       subject: 'zipIQ Email Configuration Test',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
