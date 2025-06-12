@@ -14,8 +14,10 @@ const streamRoutes = require('./routes/stream');
 const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
-// Fix for Railway proxy setup - add this line
-app.set('trust proxy', true);
+
+// Railway-specific trust proxy configuration
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
+
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
@@ -29,7 +31,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// Rate limiting - UPDATED for Railway
+// Rate limiting - Railway compatible configuration
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.MAX_REQUESTS_PER_WINDOW) || 100,
@@ -40,8 +42,17 @@ const limiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  // Add this for Railway compatibility
-  trustProxy: true,
+  // Railway-specific configuration
+  trustProxy: 'loopback, linklocal, uniquelocal',
+  keyGenerator: (req) => {
+    // Use the real IP from Railway's proxy headers
+    return req.headers['x-forwarded-for']?.split(',')[0].trim() || 
+           req.headers['x-real-ip'] || 
+           req.connection.remoteAddress || 
+           req.socket.remoteAddress ||
+           (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
+           'unknown';
+  },
   // Skip rate limiting for health checks
   skip: (req) => req.path === '/api/v1/health'
 });
