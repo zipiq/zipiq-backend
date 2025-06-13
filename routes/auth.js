@@ -519,7 +519,13 @@ router.get('/validate-reset-token/:token', (req, res) => {
 // EMAIL TEMPLATE FUNCTION
 // ==============================================
 
+// Update your email template function in routes/auth.js
+// Replace the existing createPasswordResetEmailHTML function with this:
+
 function createPasswordResetEmailHTML(username, resetUrl, token) {
+  // Extract just the token from the URL for mobile-friendly display
+  const displayToken = token;
+  
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
       <div style="text-align: center; margin-bottom: 30px;">
@@ -530,29 +536,50 @@ function createPasswordResetEmailHTML(username, resetUrl, token) {
       <div style="background-color: #f9f9f9; padding: 30px; border-radius: 10px; margin-bottom: 30px;">
         <p style="color: #333; font-size: 16px; margin-bottom: 20px;">Hi ${username},</p>
         <p style="color: #333; font-size: 16px; margin-bottom: 20px;">
-          Someone requested a password reset for your zipIQ account. If this was you, 
-          click the button below to create a new password:
+          Someone requested a password reset for your zipIQ account. Use the reset code below in the zipIQ mobile app:
         </p>
         
+        <!-- Mobile-Friendly Reset Code -->
+        <div style="background-color: #f0f8ff; border: 2px solid #007bff; border-radius: 8px; padding: 20px; margin: 30px 0; text-align: center;">
+          <p style="color: #333; font-size: 14px; font-weight: bold; margin-bottom: 10px;">RESET CODE:</p>
+          <div style="background-color: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+            <span style="font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold; color: #007bff; letter-spacing: 2px;">
+              ${displayToken}
+            </span>
+          </div>
+          <p style="color: #666; font-size: 12px; margin-top: 10px;">
+            📱 <strong>Mobile users:</strong> Tap and hold to copy this code, then paste it in the zipIQ app
+          </p>
+        </div>
+        
+        <!-- Instructions for Mobile App -->
+        <div style="background-color: #e8f5e8; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0;">
+          <h3 style="color: #28a745; margin-top: 0;">How to reset your password:</h3>
+          <ol style="color: #333; font-size: 14px; margin-bottom: 0;">
+            <li>Open the zipIQ mobile app</li>
+            <li>Tap "Forgot Password?" on the login screen</li>
+            <li>Tap "Enter Reset Token Manually"</li>
+            <li>Copy and paste the reset code above</li>
+            <li>Enter your new password</li>
+          </ol>
+        </div>
+        
+        <!-- Web Option (for future use) -->
         <div style="text-align: center; margin: 30px 0;">
+          <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Or reset your password on the web:
+          </p>
           <a href="${resetUrl}" 
-             style="background-color: #007bff; color: white; padding: 15px 30px; 
-                    text-decoration: none; border-radius: 5px; font-size: 16px; 
+             style="background-color: #007bff; color: white; padding: 12px 25px; 
+                    text-decoration: none; border-radius: 5px; font-size: 14px; 
                     font-weight: bold; display: inline-block;">
-            Reset My Password
+            Reset Password Online
           </a>
         </div>
         
-        <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
-          If the button doesn't work, copy and paste this link into your browser:
-        </p>
-        <p style="word-break: break-all; color: #007bff; font-size: 14px; margin-bottom: 20px;">
-          ${resetUrl}
-        </p>
-        
         <div style="border-top: 1px solid #ddd; padding-top: 20px; margin-top: 20px;">
           <p style="color: #d9534f; font-size: 14px; font-weight: bold; margin-bottom: 10px;">
-            ⚠️ This link will expire in 1 hour
+            ⚠️ This reset code will expire in 1 hour
           </p>
           <p style="color: #666; font-size: 14px;">
             If you didn't request this password reset, please ignore this email. 
