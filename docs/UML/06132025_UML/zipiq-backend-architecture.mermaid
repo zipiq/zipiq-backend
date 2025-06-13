@@ -1,0 +1,148 @@
+graph TB
+    %% Client Applications
+    subgraph "Client Layer"
+        iOS[iOS App]
+        Web[Web Client]
+        Mobile[Mobile Apps]
+    end
+
+    %% API Gateway / Load Balancer
+    subgraph "Network Layer"
+        CORS[CORS Handler]
+        RateLimit[Rate Limiter]
+        Security[Security Headers]
+    end
+
+    %% Main Server Components
+    subgraph "zipIQ Backend Server"
+        direction TB
+        
+        %% Core Server
+        Server[Express Server<br/>server.js]
+        SocketIO[Socket.IO Server<br/>WebRTC Signaling]
+        
+        %% Middleware
+        subgraph "Middleware Layer"
+            AuthMW[Authentication<br/>middleware/auth.js]
+            Validation[Input Validation]
+            ErrorHandler[Error Handler]
+        end
+        
+        %% Route Handlers
+        subgraph "API Routes"
+            AuthRoutes[Auth Routes<br/>routes/auth.js]
+            StreamRoutes[Stream Routes<br/>routes/stream.js]
+            HealthRoutes[Health Endpoints]
+        end
+        
+        %% Business Logic
+        subgraph "Services Layer"
+            IPFSService[Mock IPFS Service<br/>services/ipfs.js]
+            ArweaveService[Arweave Service<br/>services/arweave.js]
+        end
+        
+        %% Data Layer
+        subgraph "Data Models"
+            UserModel[User Model<br/>models/user.js]
+            StreamModel[Stream Model]
+            ChunkModel[Chunk Model]
+        end
+    end
+
+    %% External Storage Systems
+    subgraph "Decentralized Storage"
+        IPFS[IPFS Network<br/>Content Distribution]
+        Arweave[Arweave Network<br/>Permanent Archive]
+        LocalStorage[Local Mock Storage<br/>uploads/]
+    end
+
+    %% Database
+    subgraph "Database Layer"
+        PostgreSQL[(PostgreSQL Database)]
+        Tables{{"Users Table<br/>Streams Table<br/>Chunks Table"}}
+    end
+
+    %% WebRTC Infrastructure
+    subgraph "Real-time Communication"
+        WebRTC[WebRTC P2P Streaming]
+        Rooms[Stream Rooms]
+        Peers[Peer Connections]
+    end
+
+    %% Email Service
+    subgraph "External Services"
+        SMTP[SMTP Email Service<br/>Password Reset]
+        Crypto[Crypto Utils<br/>Token Generation]
+    end
+
+    %% Connections
+    iOS --> CORS
+    Web --> CORS
+    Mobile --> CORS
+    
+    CORS --> RateLimit
+    RateLimit --> Security
+    Security --> Server
+    
+    Server --> AuthMW
+    Server --> SocketIO
+    
+    AuthMW --> AuthRoutes
+    AuthMW --> StreamRoutes
+    
+    AuthRoutes --> UserModel
+    StreamRoutes --> IPFSService
+    StreamRoutes --> ArweaveService
+    
+    UserModel --> PostgreSQL
+    StreamModel --> PostgreSQL
+    ChunkModel --> PostgreSQL
+    
+    PostgreSQL --> Tables
+    
+    IPFSService --> IPFS
+    IPFSService --> LocalStorage
+    ArweaveService --> Arweave
+    
+    SocketIO --> WebRTC
+    SocketIO --> Rooms
+    SocketIO --> Peers
+    
+    AuthRoutes --> SMTP
+    AuthRoutes --> Crypto
+    
+    %% Data Flow for Video Streaming
+    subgraph "Video Streaming Flow"
+        VideoUpload[Video Chunk Upload] --> StreamRoutes
+        StreamRoutes --> IPFSService
+        IPFSService --> ArweaveService
+        ArweaveService --> Arweave
+    end
+
+    %% Authentication Flow
+    subgraph "Authentication Flow"
+        Login[Login/Register] --> AuthRoutes
+        AuthRoutes --> UserModel
+        UserModel --> JWT[JWT Token Generation]
+        JWT --> AuthMW
+    end
+
+    %% WebRTC Signaling Flow
+    subgraph "WebRTC Signaling"
+        PeerConnect[Peer Connection] --> SocketIO
+        SocketIO --> SignalExchange[Signal Exchange]
+        SignalExchange --> DirectP2P[Direct P2P Stream]
+    end
+
+    %% Styling
+    classDef clientClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef serverClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef storageClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef dbClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef serviceClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+
+    class iOS,Web,Mobile clientClass
+    class Server,SocketIO,AuthMW,AuthRoutes,StreamRoutes serverClass
+    class IPFS,Arweave,LocalStorage storageClass
+    class PostgreSQL,Tables dbClass
+    class SMTP,WebRTC serviceClass
