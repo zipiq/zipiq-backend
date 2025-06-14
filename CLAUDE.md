@@ -2,7 +2,7 @@
 
 **Project:** zipIQ - Censorship-Resistant Live Streaming Platform  
 **Version:** 1.0.0  
-**Last Updated:** December 13, 2024  
+**Last Updated:** June 14, 2025  
 **Environment:** Production (Railway), Development (Local)
 
 ---
